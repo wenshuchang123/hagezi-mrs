@@ -1,0 +1,206 @@
+name: Build HaGeZi MRS
+
+on:
+  workflow_dispatch:
+  schedule:
+    # GitHub Actions cron 使用 UTC
+    # 每天 UTC 22:30 自动构建
+    - cron: "30 22 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hagezi-mrs-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download latest Mihomo
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MIHOMO_URL="$(
+            curl -fsSL \
+              https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
+            | jq -r '
+                .assets[]
+                | select(
+                    .name
+                    | test("^mihomo-linux-amd64-v[0-9.]+\\.gz$")
+                  )
+                | .browser_download_url
+              ' \
+            | head -n 1
+          )"
+
+          if [ -z "$MIHOMO_URL" ]; then
+            echo "Cannot find Mihomo linux-amd64 release."
+            exit 1
+          fi
+
+          echo "Downloading:"
+          echo "$MIHOMO_URL"
+
+          curl -fsSL \
+            --retry 3 \
+            --retry-delay 2 \
+            "$MIHOMO_URL" \
+            -o mihomo.gz
+
+          gunzip -f mihomo.gz
+          chmod +x mihomo
+
+          ./mihomo -v
+
+      - name: Download HaGeZi sources
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          curl -fsSL \
+            --retry 3 \
+            --retry-delay 2 \
+            "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/ultimate-onlydomains.txt" \
+            -o ultimate-source.txt
+
+          curl -fsSL \
+            --retry 3 \
+            --retry-delay 2 \
+            "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/tif-onlydomains.txt" \
+            -o tif-source.txt
+
+          test -s ultimate-source.txt
+          test -s tif-source.txt
+
+          echo "Ultimate source:"
+          wc -l ultimate-source.txt
+
+          echo "TIF source:"
+          wc -l tif-source.txt
+
+      - name: Prepare Mihomo domain rules
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p tmp rules
+
+          normalize_domains() {
+            awk '
+              {
+                gsub(/\r/, "")
+
+                if ($0 ~ /^[[:space:]]*#/) {
+                  next
+                }
+
+                if ($0 ~ /^[[:space:]]*$/) {
+                  next
+                }
+
+                gsub(/^[[:space:]]+/, "")
+                gsub(/[[:space:]]+$/, "")
+
+                sub(/^\+\./, "")
+                sub(/^\*\./, "")
+
+                if ($0 != "") {
+                  print "+." $0
+                }
+              }
+            ' "$1" \
+            | LC_ALL=C sort -u \
+            > "$2"
+          }
+
+          normalize_domains \
+            ultimate-source.txt \
+            tmp/HageziUltimate.txt
+
+          normalize_domains \
+            tif-source.txt \
+            tmp/HageziTIF.txt
+
+          echo "Prepared Ultimate:"
+          wc -l tmp/HageziUltimate.txt
+
+          echo "Prepared Full TIF:"
+          wc -l tmp/HageziTIF.txt
+
+      - name: Convert to MRS
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./mihomo convert-ruleset \
+            domain \
+            text \
+            tmp/HageziUltimate.txt \
+            rules/HageziUltimate.mrs
+
+          ./mihomo convert-ruleset \
+            domain \
+            text \
+            tmp/HageziTIF.txt \
+            rules/HageziTIF.mrs
+
+          test -s rules/HageziUltimate.mrs
+          test -s rules/HageziTIF.mrs
+
+          echo "Generated files:"
+          ls -lh rules/*.mrs
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd rules
+
+          sha256sum \
+            HageziUltimate.mrs \
+            HageziTIF.mrs \
+            > SHA256SUMS
+
+          cat SHA256SUMS
+
+      - name: Commit changes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add rules/
+
+          if git diff --cached --quiet; then
+            echo "Rules have not changed."
+            exit 0
+          fi
+
+          git commit \
+            -m "chore: update HaGeZi MRS $(date -u '+%Y-%m-%d')"
+
+          git push
+
+      - name: Purge jsDelivr cache
+        if: success()
+        shell: bash
+        run: |
+          curl -fsSL \
+            "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/rules/HageziUltimate.mrs" \
+            || true
+
+          curl -fsSL \
+            "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/rules/HageziTIF.mrs" \
+            || true
