@@ -77,8 +77,18 @@ jobs:
             "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/tif-onlydomains.txt" \
             -o tif-source.txt
 
+          curl -fsSL \
+            --retry 3 \
+            --retry-delay 2 \
+            "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/pro.plus-onlydomains.txt" \
+            -o proplus-source.txt
+
+          test -s proplus-source.txt
           test -s ultimate-source.txt
           test -s tif-source.txt
+
+          echo "Pro++ source:"
+          wc -l proplus-source.txt
 
           echo "Ultimate source:"
           wc -l ultimate-source.txt
@@ -129,6 +139,13 @@ jobs:
             tif-source.txt \
             tmp/HageziTIF.txt
 
+          normalize_domains \
+            proplus-source.txt \
+            tmp/HageziProPlus.txt
+
+          echo "Prepared Pro++:"
+          wc -l tmp/HageziProPlus.txt
+
           echo "Prepared Ultimate:"
           wc -l tmp/HageziUltimate.txt
 
@@ -152,6 +169,13 @@ jobs:
             tmp/HageziTIF.txt \
             rules/HageziTIF.mrs
 
+          ./mihomo convert-ruleset \
+            domain \
+            text \
+            tmp/HageziProPlus.txt \
+            rules/HageziProPlus.mrs
+
+          test -s rules/HageziProPlus.mrs
           test -s rules/HageziUltimate.mrs
           test -s rules/HageziTIF.mrs
 
@@ -166,6 +190,7 @@ jobs:
           cd rules
 
           sha256sum \
+            HageziProPlus.mrs \
             HageziUltimate.mrs \
             HageziTIF.mrs \
             > SHA256SUMS
@@ -203,4 +228,8 @@ jobs:
 
           curl -fsSL \
             "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/rules/HageziTIF.mrs" \
+            || true
+
+          curl -fsSL \
+            "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/rules/HageziProPlus.mrs" \
             || true
